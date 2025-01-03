@@ -56,4 +56,4 @@ This repository contains an implementation of a Linux kernel module for a messag
    ```bash
    make clean
 
-Its higمy recomended to run this code on a Virtual Mشchine
+Its highly recomended to run this code on a Virtual Machine
