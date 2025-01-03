@@ -38,13 +38,13 @@ This repository contains an implementation of a Linux kernel module for a messag
 2. Open the device file in your user-space program or with tools like **`cat`** or **`echo`**.
 3. Use ioctl to set the channel:
    ```bash
-   ioctl(fd, MSG_SLOT_CHANNEL, channel_id);
+   ioctl(fd, MSG_SLOT_CHANNEL, channel_id)
 4. Write a message to the device:
    ```bash
-   write(fd, message, length);
+   write(fd, message, length)
 5. Read a message from the device:
    ```bash
-   read(fd, buffer, buffer_size);
+   read(fd, buffer, buffer_size)
 ## Unloading the Module
 1. First remove all device files that has been created:
    ```bash
@@ -56,4 +56,4 @@ This repository contains an implementation of a Linux kernel module for a messag
    ```bash
    make clean
 
-Its higky recomended to run this code on a Virtual MAchine
+Its higمy recomended to run this code on a Virtual Mشchine
