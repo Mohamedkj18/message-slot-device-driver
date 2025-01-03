@@ -10,6 +10,8 @@
 #include <linux/uaccess.h>
 #include <linux/string.h>
 #include <linux/errno.h>
+#include <linux/ioctl.h>
+#include <linux/slab.h>
 
 MODULE_LICENSE("GPL");
 
@@ -17,22 +19,20 @@ MODULE_LICENSE("GPL");
 #define DEVICE_RANGE_NAME "message_slot"
 #define BUF_LEN 128
 #define DEVICE_FILE_NAME "dev_file"
+#define MSG_SLOT_CHANNEL _IOW(235, 0, unsigned int)
 
 struct node
 {
     unsigned int id;
     char *buffer;
     int length;
-    node *next;
-
-} typedef node;
-
+    struct node *next;
+};
 struct channels
 {
-    node head;
+    struct node *head;
     int length;
-
-} typedef channels;
+};
 
 // data structure for maintaing all device files
 static struct channels message_slot_devices[256];

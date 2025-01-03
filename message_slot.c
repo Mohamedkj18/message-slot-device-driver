@@ -4,7 +4,8 @@
 static int device_open(struct inode *inode,
                        struct file *file)
 {
-    printk("device opened successfully: major: %d, minor: %d\n", imajor(inode), iminor(inode));
+    file->private_data = NULL;
+    printk("device opened successfully: major: 235, minor: %d\n", iminor(inode));
     return SUCCESS;
 }
 
@@ -16,11 +17,11 @@ static ssize_t device_read(struct file *file,
                            size_t length,
                            loff_t *offset)
 {
-    node *channel_node;
-
+    struct node *channel_node;
+    int i;
     // retreive the channel node address from file private data
-    channel_node = (node *)(file->private_data);
-    if (!channel_node)
+    channel_node = (struct node *)(file->private_data);
+    if (channel_node == NULL)
     {
         printk("no channel has been set\n");
         return -EINVAL;
@@ -28,7 +29,8 @@ static ssize_t device_read(struct file *file,
 
     if (channel_node->buffer == NULL)
     {
-        printk("no messages were written in this channel;") return -EWOULDBLOCK;
+        printk("no messages were written in this channel;");
+        return -EWOULDBLOCK;
     }
 
     if (length < channel_node->length)
@@ -37,14 +39,17 @@ static ssize_t device_read(struct file *file,
         return -ENOSPC;
     }
 
-    if (copy_to_user(buffer, &channel_node->buffer, channel_node->length) < 0)
+    for (i = 0; i < channel_node->length; i++)
     {
-        printk("error reading the message\n");
-        return -EFAULT;
+        if (put_user(channel_node->buffer[i], &buffer[i]) != 0)
+        {
+            printk("error in put_user after %d bytes\n", i);
+            return -EFAULT;
+        }
     }
 
-    printk("read successful: %zu bytes read from channel ID: %lu\n", length, (unsigned long)file->private_data);
-    return length;
+    printk("read successful: %d bytes read from channel ID: %lu\n", channel_node->length, (unsigned long)file->private_data);
+    return channel_node->length;
 }
 
 //---------------------------------------------------------------
@@ -56,11 +61,11 @@ static ssize_t device_write(struct file *file,
                             loff_t *offset)
 {
     ssize_t i;
-    node *channel_node;
+    struct node *channel_node;
     char *tmp;
 
     // retreive the channel node address from file private data
-    channel_node = (node *)(file->private_data);
+    channel_node = (struct node *)(file->private_data);
     if (!channel_node)
     {
         printk("no channel has been set\n");
@@ -71,16 +76,36 @@ static ssize_t device_write(struct file *file,
         printk("unsuported message length\n");
         return -EMSGSIZE;
     }
-
-    // copy message to a temp to ensure no partial messages
-    tmp = char[length];
-    if (copy_from_user(tmp, &buffer, lenght) > 0)
+    if (!buffer)
     {
-        printk("error writing the message\n");
-        return -EFAULT;
+        printk("buffer pointer is NULL\n");
+        return -EINVAL;
     }
 
-    channel_node->buffer = char[length];
+    // copy message to a temporary buffer to ensure no partial messages is written
+    tmp = (char *)kmalloc(length * sizeof(char), GFP_KERNEL);
+    if (!tmp)
+    {
+        printk("memory allocation failed\n");
+        return -ENOMEM;
+    }
+    for (i = 0; i < length; i++)
+    {
+        if (get_user(tmp[i], &buffer[i]) != 0)
+        {
+            printk("get_user failed after %ld bytes\n", i);
+            kfree(tmp);
+            return -EFAULT;
+        }
+    }
+    channel_node->buffer = (char *)kmalloc(length * sizeof(char), GFP_KERNEL);
+    if (!channel_node->buffer)
+    {
+        printk("buffer allocation failed\n");
+        kfree(tmp);
+        return -ENOMEM;
+    }
+
     channel_node->length = length;
 
     // copy message to the channel
@@ -88,7 +113,7 @@ static ssize_t device_write(struct file *file,
     {
         channel_node->buffer[i] = tmp[i];
     }
-
+    kfree(tmp);
     printk("write successful: %zu bytes were written to channel ID: %lu\n", length, (unsigned long)file->private_data);
     return i;
 }
@@ -97,54 +122,76 @@ static ssize_t device_write(struct file *file,
 // retreiving the channel node by the provided channel id
 // updating the private data attribute in file to be a pointer
 // to the channel node
-static int device_ioctl(struct file *file,
-                        uint cmd,
-                        unsigned long param)
+static long device_ioctl(struct file *file,
+                         uint cmd,
+                         unsigned long param)
 {
-    uint channel_id, minor;
-    node *channel_node, prev;
+    int minor, channel_id;
+    struct node *channel_node, *prev;
 
     if (cmd != MSG_SLOT_CHANNEL)
     {
-        printk("unsupported command");
+        printk("unsupported command\n");
         return -EINVAL;
     }
-    if (param = 0)
+    if (param == 0)
     {
         printk("invalid channel ID\n");
         return -EINVAL;
     }
 
-    channel_id = (unsigned int)param;
+    channel_id = (int)param;
     minor = iminor(file->f_inode);
-    channel_node = message_slot_devices[minor]->head;
+    channel_node = message_slot_devices[minor].head;
+    prev = NULL;
     while (channel_node != NULL)
     {
         if (channel_node->id == channel_id)
         {
-            break;
+            // the channel already exists
+            file->private_data = channel_node;
+            printk("Channel ID set to %u\n", channel_id);
+            return SUCCESS;
         }
         prev = channel_node;
         channel_node = channel_node->next;
     }
+
     if (channel_node == NULL)
     {
-        if (message_slot_devices[minor]->length == pow(2, 20))
+        if (message_slot_devices[minor].length == 1048576)
         {
+            // the message slot device file is at maximum capacity 2^20
             printk("invalid channel ID\n");
             return -EINVAL;
         }
-        prev->next = kalloc(sizeof(*node));
-        channel_node = prev->next;
-        channel_node->id = channel_id;
-        message_slot_devices[minor]->lenght += 1;
+        channel_node = (struct node *)kmalloc(sizeof(struct node), GFP_KERNEL);
+        if (channel_node == NULL)
+        {
+            printk("memory allocation failed\n");
+            return -EFAULT;
+        }
+        if (prev == NULL)
+        {
+            message_slot_devices[minor].head = channel_node;
+        }
+        else
+        {
+            prev->next = channel_node;
+        }
+
+        channel_node->id = param;
+        ;
+        channel_node->next = NULL;
+        channel_node->buffer = NULL;
+        channel_node->length = 0;
+        message_slot_devices[minor].length += 1;
     }
 
-    kfree(prev);
-    // save the channel ID in file->private_data
-    file->private_data = (void *)channel_node;
+    // save the channel node in file->private_data
+    file->private_data = channel_node;
 
-    printk("Channel ID set to %u, channel node address: %d\n", channel_id, &channel_node);
+    printk("Channel ID set to %u\n", channel_id);
     return SUCCESS;
 }
 //==================== DEVICE SETUP =============================
@@ -168,7 +215,7 @@ static int __init init(void)
     major = register_chrdev(235, DEVICE_RANGE_NAME, &Fops);
 
     // Negative values signify an error
-    if (major != 235)
+    if (major < 0)
     {
         printk("%s registraion failed for  %d\n", DEVICE_FILE_NAME, major);
         return -EFAULT;
@@ -176,18 +223,18 @@ static int __init init(void)
 
     for (i = 0; i < 256; i++)
     {
-        message_slot_devices[i]->head = NULL;
-        message_slot_devices[i]->length = 0;
+        message_slot_devices[i].head = NULL;
+        message_slot_devices[i].length = 0;
     }
 
-    printk("Registeration is successful. ");
+    printk("Registeration is successful.\n");
     return 0;
 }
 
 //---------------------------------------------------------------
 static void __exit cleanup(void)
 {
-    node *p, *q;
+    struct node *p, *q;
     int i;
 
     for (i = 0; i < 256; i++)
